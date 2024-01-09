@@ -126,28 +126,11 @@ impl Plugin for MyPlugin {
             return ProcessStatus::Normal;
         }
 
-        nih_log!(
-            "\
-            remain_seconds={remain_seconds} \
-            buffer_seconds={buffer_seconds} \
-            remain_beats={remain_beats} \
-            pos_beats={pos_beats} \
-            buffer_samples={buffer_samples} \
-            tempo={tempo} \
-            buffer_sample_rate={buffer_sample_rate} \
-            "
-        );
-
         // sample index of next beat
         let remain_samples: i64 = (buffer_sample_rate as f64 * remain_seconds).round() as i64;
 
         // send quarter note on every odd beat
         if (pos_beats / 1.0) as i64 % 2 == 0 {
-            // nih_log!(
-            //     "note off: pos_beats={}, remain_samples={}",
-            //     pos_beats,
-            //     remain_samples
-            // );
             context.send_event(NoteEvent::NoteOff {
                 timing: remain_samples as u32,
                 voice_id: None,
@@ -156,11 +139,6 @@ impl Plugin for MyPlugin {
                 velocity: 0.0,
             });
         } else {
-            // nih_log!(
-            //     "note on: pos_beats={}, remain_samples={}",
-            //     pos_beats,
-            //     remain_samples
-            // );
             context.send_event(NoteEvent::NoteOn {
                 timing: remain_samples as u32,
                 voice_id: None,
