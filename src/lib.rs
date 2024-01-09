@@ -45,7 +45,9 @@ impl Plugin for MyPlugin {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        if !context.transport().playing {
+        let transport = context.transport();
+
+        if !transport.playing {
             if self.last_playing {
                 nih_log!("all notes off: transport pause");
                 for n in 0..=127 {
@@ -62,13 +64,13 @@ impl Plugin for MyPlugin {
             return ProcessStatus::Normal;
         }
 
-        if context.transport().preroll_active.unwrap_or(false) {
+        if transport.preroll_active.unwrap_or(false) {
             return ProcessStatus::Normal;
         }
 
         self.last_playing = true;
 
-        let pos_samples: i64 = match context.transport().pos_samples() {
+        let pos_samples: i64 = match transport.pos_samples() {
             Some(value) => value,
             None => {
                 nih_log!("missing pos_samples");
@@ -88,7 +90,7 @@ impl Plugin for MyPlugin {
             return ProcessStatus::Normal;
         }
 
-        let pos_beats = match context.transport().pos_beats() {
+        let pos_beats = match transport.pos_beats() {
             Some(value) => value,
             None => {
                 nih_log!("missing pos_beats");
@@ -96,7 +98,7 @@ impl Plugin for MyPlugin {
             }
         };
 
-        let tempo: f64 = match context.transport().tempo {
+        let tempo: f64 = match transport.tempo {
             Some(value) => value,
             None => {
                 nih_log!("missing tempo");
