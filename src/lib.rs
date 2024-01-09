@@ -47,14 +47,16 @@ impl Plugin for MyPlugin {
     ) -> ProcessStatus {
         if !context.transport().playing {
             if self.last_playing {
-                nih_log!("note off: transport pause");
-                context.send_event(NoteEvent::NoteOff {
-                    timing: 0,
-                    voice_id: None,
-                    channel: 0,
-                    note: 60,
-                    velocity: 0.0,
-                });
+                nih_log!("all notes off: transport pause");
+                for n in 0..=127 {
+                    context.send_event(NoteEvent::NoteOff {
+                        timing: 0,
+                        voice_id: None,
+                        channel: 0,
+                        note: n,
+                        velocity: 0.0,
+                    });
+                }
             }
             self.last_playing = false;
             return ProcessStatus::Normal;
