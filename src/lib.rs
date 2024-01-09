@@ -205,6 +205,13 @@ impl Plugin for MyPlugin {
                     note: 60,
                     velocity: 0.8,
                 });
+                context.send_event(NoteEvent::NoteOn {
+                    timing,
+                    voice_id: None,
+                    channel: 1,
+                    note: 67,
+                    velocity: 0.8,
+                });
             }
             None => {
                 nih_log!("missing timing");
