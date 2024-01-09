@@ -1,6 +1,17 @@
 use nih_plug::prelude::*;
 use std::sync::Arc;
 
+const MILLISECONDS: &[time::format_description::FormatItem] =
+    time::macros::format_description!("[subsecond digits:3]");
+
+macro_rules! nih_log {
+    ($($args:tt)*) => (
+        let ms = time::OffsetDateTime::now_utc().format(MILLISECONDS).unwrap_or("xxx".to_string());
+        let ms_msg = format!("{} {}", ms, format_args!($($args)*));
+        nih_plug::prelude::nih_log!("{ms_msg}");
+    );
+}
+
 #[derive(Params)]
 struct MyPluginParams {}
 
@@ -65,6 +76,7 @@ impl Plugin for MyPlugin {
         }
 
         if transport.preroll_active.unwrap_or(false) {
+            nih_log!("preroll active: do nothing");
             return ProcessStatus::Normal;
         }
 
@@ -126,12 +138,34 @@ impl Plugin for MyPlugin {
         let buffer_seconds: f64 = buffer_samples as f64 / buffer_sample_rate as f64;
 
         if remain_seconds > buffer_seconds {
+            nih_log!(
+                "\
+                remain_seconds={remain_seconds} \
+                buffer_seconds={buffer_seconds} \
+                remain_beats={remain_beats} \
+                pos_beats={pos_beats} \
+                buffer_samples={buffer_samples} \
+                tempo={tempo} \
+                buffer_sample_rate={buffer_sample_rate} \
+                "
+            );
+
             // buffer does not contain a beat
             return ProcessStatus::Normal;
         }
 
         // sample index of next beat
         let remain_samples: i64 = (buffer_sample_rate as f64 * remain_seconds).round() as i64;
+
+        if remain_samples < 0 {
+            nih_log!("sample index of next beat is unexpectedly a negative number");
+            return ProcessStatus::Normal;
+        }
+
+        if remain_samples >= buffer_samples as i64 {
+            nih_log!("computed sample index of next beat is unexpectedly greater than max sample index for buffer");
+            return ProcessStatus::Normal;
+        }
 
         // send quarter note on every odd beat
         if (pos_beats / 1.0) as i64 % 2 == 0 {

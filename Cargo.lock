@@ -383,6 +383,7 @@ name = "note_sequencer"
 version = "0.1.0"
 dependencies = [
  "nih_plug",
+ "time",
 ]
 
 [[package]]
