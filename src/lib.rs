@@ -24,15 +24,20 @@ impl Default for MyPluginParams {
 struct MyPlugin {
     params: Arc<MyPluginParams>,
     buffer_sample_rate: Option<f32>,
-    last_playing: bool,
+    last_playing: Option<bool>,
+    last_pos_beats: Option<f64>,
+    searching_for_step: bool,
 }
 
 impl Default for MyPlugin {
     fn default() -> Self {
+        nih_log!("default constructor");
         Self {
             params: Arc::new(MyPluginParams::default()),
             buffer_sample_rate: None,
-            last_playing: true,
+            last_playing: None,
+            last_pos_beats: None,
+            searching_for_step: true,
         }
     }
 }
@@ -44,11 +49,20 @@ impl Plugin for MyPlugin {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
+        nih_log!("initialize");
         self.buffer_sample_rate = Some(buffer_config.sample_rate);
+        self.last_playing = None;
+        self.last_pos_beats = None;
+        self.searching_for_step = true;
         true
     }
 
-    fn reset(&mut self) {}
+    fn reset(&mut self) {
+        nih_log!("reset");
+        self.last_playing = None;
+        self.last_pos_beats = None;
+        self.searching_for_step = true;
+    }
 
     fn process(
         &mut self,
@@ -59,7 +73,7 @@ impl Plugin for MyPlugin {
         let transport = context.transport();
 
         if !transport.playing {
-            if self.last_playing {
+            if self.last_playing.unwrap_or(true) {
                 nih_log!("all notes off: transport pause");
                 for n in 0..=127 {
                     context.send_event(NoteEvent::NoteOff {
@@ -71,7 +85,8 @@ impl Plugin for MyPlugin {
                     });
                 }
             }
-            self.last_playing = false;
+            self.last_playing = Some(false);
+            self.searching_for_step = true;
             return ProcessStatus::Normal;
         }
 
@@ -80,27 +95,12 @@ impl Plugin for MyPlugin {
             return ProcessStatus::Normal;
         }
 
-        self.last_playing = true;
-
-        let pos_samples: i64 = match transport.pos_samples() {
-            Some(value) => value,
-            None => {
-                nih_log!("missing pos_samples");
-                return ProcessStatus::Normal;
-            }
-        };
-
-        if pos_samples == 0 {
-            nih_log!("note on: initial beat");
-            context.send_event(NoteEvent::NoteOn {
-                timing: 0,
-                voice_id: None,
-                channel: 0,
-                note: 60,
-                velocity: 0.8,
-            });
-            return ProcessStatus::Normal;
+        if transport.playing && !self.last_playing.unwrap_or(false) {
+            // catch initial step
+            self.searching_for_step = true;
         }
+
+        self.last_playing = Some(true);
 
         let pos_beats = match transport.pos_beats() {
             Some(value) => value,
@@ -110,80 +110,86 @@ impl Plugin for MyPlugin {
             }
         };
 
-        let tempo: f64 = match transport.tempo {
-            Some(value) => value,
-            None => {
-                nih_log!("missing tempo");
+        // if a note on/off should be sent within this buffer,
+        // then timing is set to the sample index corresponding to the start of the step
+        let mut timing: Option<u32> = None;
+
+        // sometimes steps begin between buffers
+        if self.searching_for_step
+            && pos_beats.floor() > self.last_pos_beats.unwrap_or(-1.0).floor()
+        {
+            nih_log!("missed buffer containing step start, setting timing to 0");
+            timing = Some(0);
+        }
+
+        self.last_pos_beats = Some(pos_beats);
+        self.searching_for_step = true;
+
+        if timing == None {
+            // fraction of a beat remaining in this beat
+            let remain_beats: f64 = 1.0 - pos_beats % 1.0;
+
+            let tempo: f64 = match transport.tempo {
+                Some(value) => value,
+                None => {
+                    nih_log!("missing tempo");
+                    return ProcessStatus::Normal;
+                }
+            };
+
+            // fraction of a second remaining in this beat
+            let remain_seconds: f64 = remain_beats * 60.0 / tempo;
+
+            let buffer_samples = buffer.samples();
+
+            let buffer_sample_rate = match self.buffer_sample_rate {
+                Some(value) => value,
+                None => {
+                    nih_log!("missing buffer_sample_rate");
+                    return ProcessStatus::Normal;
+                }
+            };
+
+            // fraction of a second this buffer represents
+            let buffer_seconds: f64 = buffer_samples as f64 / buffer_sample_rate as f64;
+
+            if remain_seconds > buffer_seconds {
+                // buffer does not contain a beat
                 return ProcessStatus::Normal;
             }
-        };
 
-        let buffer_sample_rate = match self.buffer_sample_rate {
-            Some(value) => value,
-            None => {
-                nih_log!("missing buffer_sample_rate");
+            nih_log!("buffer contains start of step");
+            self.searching_for_step = false;
+
+            // sample index of next beat
+            let remain_samples = (buffer_sample_rate as f64 * remain_seconds).round() as i32;
+
+            if remain_samples < 0 {
+                nih_log!("timing is < 0");
                 return ProcessStatus::Normal;
             }
-        };
 
-        // fraction of a beat remaining in this beat
-        let remain_beats: f64 = 1.0 - pos_beats % 1.0;
+            if remain_samples >= buffer_samples as i32 {
+                nih_log!("timing is >= buffer size");
+                return ProcessStatus::Normal;
+            }
 
-        // fraction of a second remaining in this beat
-        let remain_seconds: f64 = remain_beats * 60.0 / tempo;
-
-        let buffer_samples = buffer.samples();
-
-        // fraction of a second this buffer represents
-        let buffer_seconds: f64 = buffer_samples as f64 / buffer_sample_rate as f64;
-
-        if remain_seconds > buffer_seconds {
-            nih_log!(
-                "\
-                remain_seconds={remain_seconds} \
-                buffer_seconds={buffer_seconds} \
-                remain_beats={remain_beats} \
-                pos_beats={pos_beats} \
-                buffer_samples={buffer_samples} \
-                tempo={tempo} \
-                buffer_sample_rate={buffer_sample_rate} \
-                "
-            );
-
-            // buffer does not contain a beat
-            return ProcessStatus::Normal;
+            timing = Some(remain_samples as u32);
         }
 
-        // sample index of next beat
-        let remain_samples: i64 = (buffer_sample_rate as f64 * remain_seconds).round() as i64;
-
-        if remain_samples < 0 {
-            nih_log!("sample index of next beat is unexpectedly a negative number");
-            return ProcessStatus::Normal;
-        }
-
-        if remain_samples >= buffer_samples as i64 {
-            nih_log!("computed sample index of next beat is unexpectedly greater than max sample index for buffer");
-            return ProcessStatus::Normal;
-        }
-
-        // send quarter note on every odd beat
-        if (pos_beats / 1.0) as i64 % 2 == 0 {
-            context.send_event(NoteEvent::NoteOff {
-                timing: remain_samples as u32,
-                voice_id: None,
-                channel: 0,
-                note: 60,
-                velocity: 0.0,
-            });
-        } else {
-            context.send_event(NoteEvent::NoteOn {
-                timing: remain_samples as u32,
-                voice_id: None,
-                channel: 0,
-                note: 60,
-                velocity: 0.8,
-            });
+        match timing {
+            Some(timing) => {
+                context.send_event(NoteEvent::NoteOn {
+                    timing,
+                    voice_id: None,
+                    channel: 0,
+                    note: 60,
+                    velocity: 0.8,
+                });
+            }
+            None => {
+                nih_log!("missing timing");
+            }
         }
 
         ProcessStatus::Normal
